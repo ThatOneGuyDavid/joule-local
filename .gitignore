@@ -1,0 +1,16 @@
+/build/
+/signing/
+*.apk
+*.idsig
+*.keystore
+*.jks
+*.pem
+.env
+.env.*
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Preserve the reviewed APK distributed with each release.
+!/releases/*/*.apk

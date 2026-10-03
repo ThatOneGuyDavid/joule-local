@@ -1,0 +1,15 @@
+Joule Local v0.1
+Independent Android controller for the original ChefSteps Joule.
+
+Protocol encoding and BLE behavior are derived from:
+https://github.com/acato/ha-joule
+Commit: 4c950a68d22b059be09fb681afa83339408da6d0
+License: Apache License, Version 2.0 (licenses/Apache-2.0.txt).
+The upstream files were translated and adapted to Java / Android.
+
+Modifications include native Android GATT operation serialization,
+message-handle correlation, explicit acknowledgement checks, local private
+pairing-key storage, a phone reminder timer, and an e-ink friendly UI.
+
+Joule, ChefSteps and Breville are trademarks of their respective owners.
+This app is not affiliated with or endorsed by those companies.

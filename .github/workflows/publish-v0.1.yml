@@ -1,0 +1,55 @@
+name: Publish v0.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - releases/v0.1/**
+      - .github/workflows/publish-v0.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-v0.1
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      GH_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Publish the reviewed APK with checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in Joule-Local-v0.1.apk SHA256SUMS.txt RELEASE-NOTES.md; do
+            gh api "repos/$GH_REPO/contents/releases/v0.1/$name?ref=$GH_COMMIT" \
+              --jq '.content' | base64 --decode > "$name"
+          done
+          sha256sum --check SHA256SUMS.txt
+          if gh release view v0.1 >/dev/null 2>&1; then
+            echo 'v0.1 already exists; preserving the published release.'
+          else
+            gh release create v0.1 \
+              --target "$GH_COMMIT" \
+              --title 'Joule Local v0.1 — First community release' \
+              --notes-file RELEASE-NOTES.md \
+              --latest \
+              Joule-Local-v0.1.apk SHA256SUMS.txt
+          fi
+          mkdir downloaded
+          gh release download v0.1 --dir downloaded \
+            --pattern Joule-Local-v0.1.apk --pattern SHA256SUMS.txt
+          cmp SHA256SUMS.txt downloaded/SHA256SUMS.txt
+          cmp Joule-Local-v0.1.apk downloaded/Joule-Local-v0.1.apk
+          (cd downloaded && sha256sum --check SHA256SUMS.txt)
+          sha256sum downloaded/Joule-Local-v0.1.apk
+          gh release view v0.1 --json url,tagName,isDraft,isPrerelease,assets

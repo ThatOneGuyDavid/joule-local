@@ -1,0 +1,32 @@
+PASS: 33 protocol checks (including 7 upstream golden packets)
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): false
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+package: name='com.local.joulekompakt' versionCode='1' versionName='0.1' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'
+minSdkVersion:'31'
+targetSdkVersion:'35'
+uses-permission: name='android.permission.BLUETOOTH_SCAN' usesPermissionFlags='neverForLocation'
+uses-permission: name='android.permission.BLUETOOTH_CONNECT'
+uses-permission: name='android.permission.FOREGROUND_SERVICE'
+uses-permission: name='android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE'
+uses-permission: name='android.permission.POST_NOTIFICATIONS'
+application-label:'Joule Local'
+application-icon-160:'res/drawable/ic_joule.xml'
+application: label='Joule Local' icon='res/drawable/ic_joule.xml'
+launchable-activity: name='com.local.joulekompakt.MainActivity'  label='' icon=''
+feature-group: label=''
+  uses-feature: name='android.hardware.bluetooth_le'
+  uses-feature: name='android.hardware.faketouch'
+  uses-implied-feature: name='android.hardware.faketouch' reason='default feature for all apps'
+main
+other-receivers
+other-services
+supports-screens: 'small' 'normal' 'large' 'xlarge'
+supports-any-density: 'true'
+locales: '--_--'
+densities: '160'
