@@ -293,10 +293,10 @@ public class JouleService extends Service {
 		switch(step) { case 0: return "Idle"; case 1: return "Heating"; case 2: return "Ready for food"; case 3: return "Cooking"; case 4: return "Cook complete"; case 5: return "Device error"; default: return "State unknown"; }
 	}
 	boolean fresh() { return ready && lastData != 0 && SystemClock.elapsedRealtime() - lastData < 15000 && Float.isFinite(temperature); }
-	void startCook(float fahrenheit, boolean full) {
+	void startCook(float celsius, boolean full) {
 		if (!fresh() || error != 0 || step == 5 || commandType != 0) { status("Wait for a fresh temperature and clear any Joule error before starting."); return; }
-		if (!Float.isFinite(fahrenheit) || fahrenheit < 32 || fahrenheit > 208.4f) { status("Enter a temperature from 32 to 208.4°F."); return; }
-		requestedTemp = (fahrenheit - 32f) * 5f / 9f; fullStart = full;
+		if (!Float.isFinite(celsius) || celsius < 0 || celsius > 100) { status("Enter a temperature from 0 to 100 °C (32 to 208.4 °F)."); return; }
+		requestedTemp = celsius; fullStart = full;
 		commandType = 50; commandHandle = 0; preparing = true; prepareAfter = SystemClock.elapsedRealtime(); commandSent = prepareAfter;
 		command = "Refreshing Joule state before START…"; renew(); changed();
 	}

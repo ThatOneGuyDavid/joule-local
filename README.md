@@ -8,7 +8,8 @@ Initial community release: **v0.1**.
 
 - Find and pair directly with Joule using its physical button.
 - Save the pairing key on the phone.
-- Display live water temperature and set a target in °F.
+- Display live water temperature and set a target in °F or °C (auto-detected from
+  the phone locale, with a saved manual override under More / diagnostics).
 - Start and stop cooking with command acknowledgement.
 - Use a separate phone reminder timer.
 - Copy diagnostic logs for troubleshooting.
