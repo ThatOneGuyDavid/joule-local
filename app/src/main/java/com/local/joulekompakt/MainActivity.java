@@ -112,11 +112,14 @@ public class MainActivity extends Activity {
 	void render() {
 		if (service == null) return;
 		JouleService s = service;
-		setText(connectionText, s.status);
 		String unit = useF() ? "F" : "C";
+		String st = s.status;
+		if (Float.isFinite(s.targetTemp)) st += " · target " + fmtTemp(s.targetTemp) + "°" + unit;
+		setText(connectionText, st);
 		String value = Float.isFinite(s.temperature) ? String.format(Locale.US, "Water: %.1f°%s%s", displayTemp(s.temperature), unit, s.fresh() ? "" : " (stale)") : "Water: — °" + unit;
 		setText(current, value); setText(command, s.command); command.setVisibility(s.command.isEmpty() ? View.GONE : View.VISIBLE);
 		start.setEnabled(s.fresh() && s.error == 0 && s.step != 5 && s.commandType == 0);
+		setText(start, s.step >= 1 && s.step <= 4 && s.error == 0 ? "SET" : "START / SET");
 		stop.setEnabled(s.ready); disconnect.setEnabled(s.gatt != null || s.scanning);
 		find.setEnabled(!s.scanning); setText(find, s.scanning ? "Searching…" : "Find Joule");
 		setText(timer, s.timerText); setText(timerButton, s.timerEnd == 0 ? "Start timer" : "Cancel timer");

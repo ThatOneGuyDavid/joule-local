@@ -1,9 +1,11 @@
 package com.local.joulekompakt;
 
+import android.Manifest;
 import android.app.*;
 import android.bluetooth.*;
 import android.bluetooth.le.*;
 import android.content.*;
+import android.content.pm.PackageManager;
 import android.os.*;
 import android.util.Base64;
 import java.util.*;
@@ -26,10 +28,10 @@ public class JouleService extends Service {
 	BluetoothGattCharacteristic write, read, notify;
 	Op active;
 	Runnable listener;
-	boolean scanning, ready, pairing, submitting, configured, foreground;
+	boolean scanning, ready, pairing, submitting, configured, foreground, autoPicked, retryPending;
 	int generation, mtu = 23, submitHandle, commandHandle, commandType, step = -1, error;
-	long feed, sequence, lastData, lastRead, lastRenew, commandSent, timerEnd;
-	float temperature = Float.NaN;
+	long feed, sequence, lastData, lastRead, lastRenew, lastDescribe, commandSent, timerEnd;
+	float temperature = Float.NaN, targetTemp = Float.NaN;
 	String status = "Tap Find Joule to connect.", address = "", command = "", timerText = "Timer off";
 	byte[] recipient = Proto.EMPTY, candidateKey;
 	float requestedTemp;
@@ -49,11 +51,28 @@ public class JouleService extends Service {
 		nm.createNotificationChannel(new NotificationChannel("connection", "Joule connection", NotificationManager.IMPORTANCE_LOW));
 		nm.createNotificationChannel(new NotificationChannel("timer", "Cook timer", NotificationManager.IMPORTANCE_HIGH));
 		h.post(tick);
+		h.post(this::autoConnect);
+		IntentFilter btFilter = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
+		if (Build.VERSION.SDK_INT >= 33) registerReceiver(btReceiver, btFilter, Context.RECEIVER_NOT_EXPORTED);
+		else registerReceiver(btReceiver, btFilter);
 	}
 	@Override public int onStartCommand(Intent i, int flags, int id) {
 		if (i != null && "timer_done".equals(i.getAction())) updateTimer();
-		return START_NOT_STICKY;
+		return START_STICKY;
 	}
+	boolean scanPermitted() {
+		return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+			&& checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+	}
+	void autoConnect() {
+		if (gatt == null && !scanning && !prefs.getString("lastAddress", "").isEmpty() && bluetooth() && scanPermitted()) { connectSaved(retryPending); retryPending = false; }
+	}
+	final BroadcastReceiver btReceiver = new BroadcastReceiver() {
+		@Override public void onReceive(Context c, Intent i) {
+			if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(i.getAction()) && i.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) == BluetoothAdapter.STATE_ON)
+				h.post(() -> autoConnect());
+		}
+	};
 	void changed() { if (listener != null) listener.run(); }
 	void note(String text) {
 		log.append(new java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date())).append(" ").append(text).append('\n');
@@ -78,8 +97,8 @@ public class JouleService extends Service {
 	}
 	void scan() {
 		if (!bluetooth()) return;
-		disconnect(false); foreground(); found.clear(); scanning = true;
-		status("Looking for Joule…");
+		disconnect(false); foreground(); found.clear(); scanning = true; autoPicked = false;
+		status(prefs.getString("lastAddress", "").isEmpty() ? "Looking for Joule…" : "Looking for your saved Joule…");
 		try {
 			adapter.getBluetoothLeScanner().startScan(null, new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback);
 			final int gen = generation;
@@ -98,7 +117,11 @@ public class JouleService extends Service {
 			ScanRecord sr = result.getScanRecord(); String name = sr.getDeviceName();
 			boolean matches = sr.getManufacturerSpecificData(0x0159) != null || (name != null && name.toLowerCase(Locale.US).contains("joule"))
 				|| (sr.getServiceUuids() != null && sr.getServiceUuids().contains(new ParcelUuid(SERVICE)));
-			if (matches) { boolean fresh = !found.containsKey(result.getDevice().getAddress()); found.put(result.getDevice().getAddress(), result); if (fresh) changed(); }
+			if (matches) {
+				boolean fresh = !found.containsKey(result.getDevice().getAddress()); found.put(result.getDevice().getAddress(), result); if (fresh) changed();
+				String saved = prefs.getString("lastAddress", "");
+				if (!autoPicked && !saved.isEmpty() && result.getDevice().getAddress().equals(saved)) { autoPicked = true; connect(result); }
+			}
 		}); }
 		@Override public void onScanFailed(int code) { h.post(() -> { scanning = false; status("Bluetooth scan failed (" + code + "). Try again."); }); }
 	};
@@ -107,18 +130,37 @@ public class JouleService extends Service {
 		address = result.getDevice().getAddress();
 		byte[] ad = result.getScanRecord() == null ? null : result.getScanRecord().getManufacturerSpecificData(0x0159);
 		recipient = ad != null && ad.length >= 8 ? Arrays.copyOf(ad, 8) : Proto.EMPTY;
+		prefs.edit().putString("lastAddress", address).putString("lastRecipient", Base64.encodeToString(recipient, Base64.NO_WRAP)).apply();
+		openGatt(result.getDevice(), false);
+	}
+	void connectSaved(boolean retry) {
+		String saved = prefs.getString("lastAddress", "");
+		if (saved.isEmpty() || adapter == null) { scan(); return; }
+		disconnect(false); if (!bluetooth()) return; foreground();
+		address = saved;
+		byte[] rec = Proto.EMPTY;
+		try { rec = Base64.decode(prefs.getString("lastRecipient", ""), Base64.NO_WRAP); } catch (Exception ignored) { }
+		recipient = rec.length == 8 ? rec : Proto.EMPTY;
+		openGatt(adapter.getRemoteDevice(saved), retry);
+	}
+	void openGatt(BluetoothDevice device, boolean retry) {
 		status("Connecting to " + address + "…");
 		try {
-			gatt = result.getDevice().connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
+			gatt = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
 			final int gen = generation;
-			h.postDelayed(() -> { if (gen == generation && !configured) fail("Connection setup timed out. Tap Find Joule to retry."); }, 25000);
+			h.postDelayed(() -> {
+				if (gen == generation && !configured) {
+					if (retry) fail("Connection setup timed out. Tap Find Joule to retry.");
+					else { fail("Connection setup timed out. Auto-reconnecting once…"); scheduleReconnect(); }
+				}
+			}, 25000);
 		} catch (Exception e) { fail("Connection failed: " + e.getMessage()); }
 	}
 	void disconnect(boolean user) {
 		generation++; stopScan(); queue.clear(); active = null; h.removeCallbacks(opTimeout);
-		ready = pairing = submitting = configured = preparing = false;
+		ready = pairing = submitting = configured = preparing = retryPending = false;
 		commandHandle = commandType = 0; command = ""; submitHandle = 0; exchangeHandles.clear();
-		lastData = lastRead = lastRenew = feed = sequence = 0; temperature = Float.NaN; step = -1; error = 0;
+		lastData = lastRead = lastRenew = lastDescribe = feed = sequence = 0; temperature = Float.NaN; targetTemp = Float.NaN; step = -1; error = 0;
 		BluetoothGatt old = gatt; gatt = null;
 		if (old != null) { try { old.disconnect(); old.close(); } catch (Exception ignored) { } }
 		write = read = notify = null; mtu = 23;
@@ -126,6 +168,11 @@ public class JouleService extends Service {
 	}
 	void releaseForeground() { if (timerEnd == 0 && gatt == null && !scanning && foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false; } }
 	void fail(String message) { disconnect(false); status(message); releaseForeground(); }
+	void scheduleReconnect() {
+		if (prefs.getString("lastAddress", "").isEmpty()) return;
+		final int gen = generation;
+		h.postDelayed(() -> { if (gen == generation && gatt == null && !scanning && bluetooth()) { retryPending = true; autoConnect(); } }, 4000);
+	}
 	void forget() {
 		if (!address.isEmpty()) prefs.edit().remove("key_" + address).apply();
 		disconnect(true); status("Saved key removed for this Joule. Find it again to pair.");
@@ -133,7 +180,7 @@ public class JouleService extends Service {
 	final BluetoothGattCallback callback = new BluetoothGattCallback() {
 		@Override public void onConnectionStateChange(BluetoothGatt g, int code, int state) { h.post(() -> {
 			if (g != gatt) return;
-			if (code != 0 || state == BluetoothProfile.STATE_DISCONNECTED) { fail("Bluetooth disconnected (" + code + "). Joule state unknown; reconnect to check."); return; }
+			if (code != 0 || state == BluetoothProfile.STATE_DISCONNECTED) { fail("Bluetooth disconnected (" + code + "). Joule state unknown; auto-reconnecting…"); scheduleReconnect(); return; }
 			if (state == BluetoothProfile.STATE_CONNECTED) { status("Connected. Reading services…"); if (!g.discoverServices()) fail("Cannot discover Bluetooth services."); }
 		}); }
 		@Override public void onServicesDiscovered(BluetoothGatt g, int code) { h.post(() -> {
@@ -248,7 +295,12 @@ public class JouleService extends Service {
 		final int gen = generation, id = submitHandle;
 		h.postDelayed(() -> { if (gen == generation && submitting && submitHandle == id) { if (!full && recipient.length == 8) submit(true); else pair(); } }, 10000);
 	}
-	void renew() { if (ready) { send(70, Proto.number(1, 1)); lastRenew = SystemClock.elapsedRealtime(); } }
+	void renew() { if (ready) { send(70, Proto.number(1, 1)); lastRenew = SystemClock.elapsedRealtime(); describe(false); } }
+	void describe(boolean force) {
+		if (!ready || feed == 0) return;
+		long now = SystemClock.elapsedRealtime();
+		if (force || now - lastDescribe >= 30000) { lastDescribe = now; send(95, Proto.number(1, feed), Proto.EMPTY, Proto.EMPTY, false, true); }
+	}
 	void receive(byte[] raw) {
 		try {
 			List<Proto.Field> outer = Proto.fields(raw); int replyHandle = 0;
@@ -273,6 +325,7 @@ public class JouleService extends Service {
 					float t = Proto.temperature(inner); if (Float.isFinite(t) && t >= -10 && t <= 110) temperature = t; else temperature = Float.NaN;
 					step = (int)Proto.number(inner, 11, 0); error = (int)Proto.number(inner, 4, 0); lastData = SystemClock.elapsedRealtime();
 					status = error != 0 ? "Joule reports an error (" + error + "). Check the appliance." : "Connected · " + stateName();
+					if (Float.isNaN(targetTemp)) describe(false);
 					if (preparing && lastData > prepareAfter) {
 						preparing = false;
 						if (error != 0 || step == 5 || !Float.isFinite(temperature)) { commandType = 0; command = "Cannot start: invalid temperature or Joule error."; changed(); return; }
@@ -280,11 +333,19 @@ public class JouleService extends Service {
 						h.postDelayed(() -> { if (gen == generation && commandType == 50 && commandHandle == 0) sendStart(); }, 500);
 					}
 					changed();
-				} else if ((f.id == 51 || f.id == 61) && replyHandle == commandHandle && commandType == f.id - 1) {
+				} else if ((f.id == 51 || f.id == 53 || f.id == 61) && replyHandle == commandHandle && commandType == f.id - 1) {
 					long result = Proto.number(inner, 1, 0); int type = commandType;
 					commandType = commandHandle = 0;
-					command = result == 0 ? (type == 50 ? "Joule accepted the temperature / start command." : "Joule confirmed STOP.") : "Joule rejected " + (type == 50 ? "START" : "STOP") + " (code " + result + ").";
-					note(command); renew();
+					command = result == 0 ? (type == 50 ? "Joule accepted the temperature / start command." : type == 52 ? "Joule accepted the new temperature." : "Joule confirmed STOP.")
+						: "Joule rejected " + (type == 50 ? "START" : type == 52 ? "SET" : "STOP") + " (code " + result + ").";
+					note(command); if (result == 0) describe(true); renew();
+				} else if (f.id == 96) {
+					byte[] prog = Proto.data(inner, 2);
+					if (prog != null) {
+						float sp = Proto.setPoint(Proto.fields(prog));
+						if (Float.isFinite(sp) && sp >= -10 && sp <= 110) targetTemp = sp;
+					}
+					changed();
 				}
 			}
 		} catch (IllegalArgumentException e) { note("Ignored unreadable Bluetooth message (" + raw.length + " bytes)"); }
@@ -297,6 +358,10 @@ public class JouleService extends Service {
 		if (!fresh() || error != 0 || step == 5 || commandType != 0) { status("Wait for a fresh temperature and clear any Joule error before starting."); return; }
 		if (!Float.isFinite(celsius) || celsius < 0 || celsius > 100) { status("Enter a temperature from 0 to 100 °C (32 to 208.4 °F)."); return; }
 		requestedTemp = celsius; fullStart = full;
+		if (step >= 1 && step <= 4) {
+			commandType = 52; commandHandle = send(52, Proto.updateBody(celsius)); commandSent = SystemClock.elapsedRealtime();
+			command = "SET sent; waiting for Joule confirmation…"; changed(); return;
+		}
 		commandType = 50; commandHandle = 0; preparing = true; prepareAfter = SystemClock.elapsedRealtime(); commandSent = prepareAfter;
 		command = "Refreshing Joule state before START…"; renew(); changed();
 	}
@@ -309,8 +374,8 @@ public class JouleService extends Service {
 	void stopCook() {
 		if (!ready) { status("Not connected. Use the Joule's physical button to stop it."); return; }
 		preparing = false;
-		// A queued but not yet transmitted START must never follow STOP.
-		queue.removeIf(op -> "Message 50".equals(op.label));
+		// A queued but not yet transmitted START/SET must never follow STOP.
+		queue.removeIf(op -> "Message 50".equals(op.label) || "Message 52".equals(op.label));
 		commandType = 60; commandHandle = send(60, Proto.EMPTY); commandSent = SystemClock.elapsedRealtime();
 		command = "STOP sent; waiting for Joule confirmation…"; changed();
 	}
@@ -345,5 +410,9 @@ public class JouleService extends Service {
 		}
 		changed(); h.postDelayed(this, 1000);
 	} };
-	@Override public void onDestroy() { h.removeCallbacksAndMessages(null); disconnect(false); super.onDestroy(); }
+	@Override public void onDestroy() {
+		h.removeCallbacksAndMessages(null);
+		try { unregisterReceiver(btReceiver); } catch (Exception ignored) { }
+		disconnect(false); super.onDestroy();
+	}
 }

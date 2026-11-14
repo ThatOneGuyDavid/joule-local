@@ -16,6 +16,9 @@ public class ProtocolTests {
 		for(long n:new long[]{0,1,127,128,255,16384,0xffffffffL,Long.MAX_VALUE}) check(Proto.number(Proto.fields(Proto.number(3,n)),3,-1)==n,"varint " + n);
 		List<Proto.Field> point=Proto.fields(Proto.join(Proto.number(1,1),Proto.number(2,456),Proto.fixed(10,Float.floatToIntBits(55.5f)),Proto.number(11,3),Proto.number(4,2)));
 		check(Proto.temperature(point)==55.5f,"temperature decode");
+		check(hex(Proto.updateBody(60f)).equals("15000070422001"),"update program wire packet");
+		check(Proto.setPoint(Proto.fields(Proto.fixed(1,Float.floatToIntBits(60f))))==60f,"setpoint decode");
+		boolean badUpdate=false; try { Proto.updateBody(101f); } catch(IllegalArgumentException e) { badUpdate=true; } check(badUpdate,"invalid update setpoint blocked");
 		check(Proto.number(point,11,-1)==3,"cooking state");
 		check(Proto.number(point,4,-1)==2,"device error");
 		check(Float.isNaN(Proto.temperature(Proto.fields(Proto.EMPTY))),"missing temperature not fabricated");
