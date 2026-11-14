@@ -17,8 +17,9 @@ import java.util.*;
 public class MainActivity extends Activity {
 	JouleService service;
 	boolean bound, fullFormat;
-	TextView connectionText, current, command, timer;
+	TextView connectionText, current, command, timer, targetLabel;
 	EditText target, minutes;
+	String unitPref = "auto";
 	Button find, disconnect, start, stop, timerButton;
 	LinearLayout devices;
 	String deviceSignature = "";
@@ -30,6 +31,7 @@ public class MainActivity extends Activity {
 	@Override public void onCreate(Bundle saved) {
 		super.onCreate(saved); prefs = getSharedPreferences("joule", MODE_PRIVATE);
 		fullFormat = prefs.getBoolean("fullFormat", false);
+		unitPref = prefs.getString("unit", "auto");
 		ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setBackgroundColor(Color.WHITE);
 		LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(12), dp(8), dp(12), dp(12)); scroll.addView(root);
 		scroll.setOnApplyWindowInsetsListener((v, insets) -> { android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()); v.setPadding(bars.left, bars.top, bars.right, bars.bottom); return insets; });
@@ -40,13 +42,13 @@ public class MainActivity extends Activity {
 		disconnect = button("Disconnect", () -> { if (service != null) service.disconnect(true); }); weighted(links, disconnect, 1);
 		devices = new LinearLayout(this); devices.setOrientation(LinearLayout.VERTICAL); root.addView(devices);
 		line(root);
-		current = text("Water: — °F", 30, true); root.addView(current);
-		root.addView(text("TARGET °F", 14, true));
+		current = text("Water: — °" + (useF() ? "F" : "C"), 30, true); root.addView(current);
+		targetLabel = text("TARGET °" + (useF() ? "F" : "C"), 14, true); root.addView(targetLabel);
 		LinearLayout temperatureRow = row(); root.addView(temperatureRow);
-		target = edit(prefs.getString("target", "135.0"), true); target.setId(1001);
-		weighted(temperatureRow, button("−", () -> adjust(target, -1, 32, 208.4, true)), 1);
+		target = edit(fmtTemp(loadTargetC()), true); target.setId(1001);
+		weighted(temperatureRow, button("−", () -> adjust(target, useF() ? -1 : -0.5, useF() ? 32 : 0, useF() ? 208.4 : 100, true)), 1);
 		weighted(temperatureRow, target, 2);
-		weighted(temperatureRow, button("+", () -> adjust(target, 1, 32, 208.4, true)), 1);
+		weighted(temperatureRow, button("+", () -> adjust(target, useF() ? 1 : 0.5, useF() ? 32 : 0, useF() ? 208.4 : 100, true)), 1);
 		LinearLayout controls = row(); root.addView(controls);
 		start = button("START / SET", () -> start()); weighted(controls, start, 1);
 		stop = button("STOP", () -> { if (service != null) service.stopCook(); }); weighted(controls, stop, 1);
@@ -73,11 +75,22 @@ public class MainActivity extends Activity {
 	void start() {
 		if (service == null) return;
 		try {
-			float f = Float.parseFloat(target.getText().toString());
-			if (!Float.isFinite(f) || f < 32 || f > 208.4f) { target.setError("32–208.4°F"); return; }
+			float v = Float.parseFloat(target.getText().toString());
+			double lo = useF() ? 32 : 0, hi = useF() ? 208.4 : 100;
+			if (!Float.isFinite(v) || v < lo || v > hi) { target.setError(useF() ? "32–208.4°F" : "0–100°C"); return; }
 			saveInputs(); ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(target.getWindowToken(), 0);
-			target.clearFocus(); service.startCook(f, fullFormat);
+			target.clearFocus(); service.startCook((float)(useF() ? (v - 32) * 5.0 / 9.0 : v), fullFormat);
 		} catch (NumberFormatException e) { target.setError("Enter a temperature"); }
+	}
+	static final java.util.Set<String> FAHRENHEIT = new java.util.HashSet<>(Arrays.asList("US", "BS", "BZ", "KY", "PW", "FM", "MH", "LR", "PR", "VI", "GU", "AS", "MP"));
+	boolean autoF() { return FAHRENHEIT.contains(Locale.getDefault().getCountry()); }
+	boolean useF() { return "F".equals(unitPref) || (!"C".equals(unitPref) && autoF()); }
+	String unitLabel() { return "C".equals(unitPref) ? "°C" : "F".equals(unitPref) ? "°F" : "Auto (" + (autoF() ? "°F" : "°C") + ")"; }
+	double displayTemp(double celsius) { return useF() ? celsius * 9.0 / 5.0 + 32.0 : celsius; }
+	String fmtTemp(double celsius) { return String.format(Locale.US, "%.1f", displayTemp(celsius)); }
+	double loadTargetC() {
+		if (prefs.contains("targetC")) { try { return Double.parseDouble(prefs.getString("targetC", "")); } catch (NumberFormatException ignored) { } }
+		try { return (Double.parseDouble(prefs.getString("target", "135.0")) - 32) * 5.0 / 9.0; } catch (NumberFormatException e) { return 57.2; }
 	}
 	boolean permissions() {
 		ArrayList<String> missing = new ArrayList<>();
@@ -99,10 +112,14 @@ public class MainActivity extends Activity {
 	void render() {
 		if (service == null) return;
 		JouleService s = service;
-		setText(connectionText, s.status);
-		String value = Float.isFinite(s.temperature) ? String.format(Locale.US, "Water: %.1f°F%s", s.temperature * 9f / 5f + 32f, s.fresh() ? "" : " (stale)") : "Water: — °F";
+		String unit = useF() ? "F" : "C";
+		String st = s.status;
+		if (Float.isFinite(s.targetTemp)) st += " · target " + fmtTemp(s.targetTemp) + "°" + unit;
+		setText(connectionText, st);
+		String value = Float.isFinite(s.temperature) ? String.format(Locale.US, "Water: %.1f°%s%s", displayTemp(s.temperature), unit, s.fresh() ? "" : " (stale)") : "Water: — °" + unit;
 		setText(current, value); setText(command, s.command); command.setVisibility(s.command.isEmpty() ? View.GONE : View.VISIBLE);
 		start.setEnabled(s.fresh() && s.error == 0 && s.step != 5 && s.commandType == 0);
+		setText(start, s.step >= 1 && s.step <= 4 && s.error == 0 ? "SET" : "START / SET");
 		stop.setEnabled(s.ready); disconnect.setEnabled(s.gatt != null || s.scanning);
 		find.setEnabled(!s.scanning); setText(find, s.scanning ? "Searching…" : "Find Joule");
 		setText(timer, s.timerText); setText(timerButton, s.timerEnd == 0 ? "Start timer" : "Cancel timer");
@@ -117,17 +134,32 @@ public class MainActivity extends Activity {
 		}
 	}
 	void more() {
-		String[] options = {"Copy diagnostic log", "View diagnostic log", "Forget selected Joule's key", "Full start format: " + (fullFormat ? "ON" : "OFF"), "About / first test"};
+		String[] options = {"Copy diagnostic log", "View diagnostic log", "Forget selected Joule's key", "Temperature unit: " + unitLabel(), "Full start format: " + (fullFormat ? "ON" : "OFF"), "About / first test"};
 		new AlertDialog.Builder(this).setTitle("Joule Local v0.1").setItems(options, (d, which) -> {
 			if (which == 0) { ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Joule diagnostics", diagnostics())); Toast.makeText(this, "Log copied (pairing keys excluded)", Toast.LENGTH_SHORT).show(); }
 			if (which == 1) { TextView t = text(diagnostics(), 12, false); t.setTextIsSelectable(true); t.setPadding(dp(12), dp(12), dp(12), dp(12)); ScrollView sc = new ScrollView(this); sc.addView(t); new AlertDialog.Builder(this).setTitle("Diagnostics").setView(sc).setPositiveButton("Close", null).show(); }
 			if (which == 2) new AlertDialog.Builder(this).setMessage("Remove the saved pairing key for the selected Joule? You'll need its top button to pair again.").setNegativeButton("Cancel", null).setPositiveButton("Forget", (x,y) -> { if (service != null) service.forget(); }).show();
-			if (which == 3) { fullFormat = !fullFormat; prefs.edit().putBoolean("fullFormat", fullFormat).apply(); Toast.makeText(this, "Full start format " + (fullFormat ? "on" : "off"), Toast.LENGTH_SHORT).show(); }
-			if (which == 4) new AlertDialog.Builder(this).setTitle("First hardware test").setMessage("Original ChefSteps Joule CS10001 / CS20001.\n\n1. Fill a pot within Joule's marked water limits. Close any other Joule app.\n2. Find Joule, select it, then press its top button when asked.\n3. Wait for a live water temperature, choose a target, then START / SET.\n4. Check that STOP is confirmed and the unit stops.\n\nThe phone timer is a reminder only. It never stops the heater and its alert may be delayed by phone sleep settings. Allow notifications for timer alerts.\n\nDisconnecting or closing this app does not stop Joule.\n\nNo account, Internet permission, cloud or Google services. Pairing keys stay in private app storage; backups are disabled.\n\nProtocol derived from acato/ha-joule (Apache 2.0). This independent app is not affiliated with Breville.\n\nFull start format adds the cook-session metadata; try it only if the default START is rejected. Hardware operation of this Android port is awaiting your test.").setPositiveButton("OK", null).show();
+			if (which == 3) {
+				final boolean wasF = useF();
+				new AlertDialog.Builder(this).setTitle("Temperature unit").setItems(new String[]{"Automatic (locale → " + (autoF() ? "°F" : "°C") + ")", "Celsius (°C)", "Fahrenheit (°F)"}, (u, w) -> {
+					unitPref = w == 1 ? "C" : w == 2 ? "F" : "auto";
+					prefs.edit().putString("unit", unitPref).apply();
+					try { double v = Double.parseDouble(target.getText().toString()); target.setText(fmtTemp(wasF ? (v - 32) * 5.0 / 9.0 : v)); } catch (NumberFormatException ignored) { }
+					targetLabel.setText("TARGET °" + (useF() ? "F" : "C"));
+					render();
+					Toast.makeText(this, "Temperature unit: " + unitLabel(), Toast.LENGTH_SHORT).show();
+				}).show();
+			}
+			if (which == 4) { fullFormat = !fullFormat; prefs.edit().putBoolean("fullFormat", fullFormat).apply(); Toast.makeText(this, "Full start format " + (fullFormat ? "on" : "off"), Toast.LENGTH_SHORT).show(); }
+			if (which == 5) new AlertDialog.Builder(this).setTitle("First hardware test").setMessage("Original ChefSteps Joule CS10001 / CS20001.\n\n1. Fill a pot within Joule's marked water limits. Close any other Joule app.\n2. Find Joule, select it, then press its top button when asked.\n3. Wait for a live water temperature, choose a target, then START / SET.\n4. Check that STOP is confirmed and the unit stops.\n\nThe phone timer is a reminder only. It never stops the heater and its alert may be delayed by phone sleep settings. Allow notifications for timer alerts.\n\nDisconnecting or closing this app does not stop Joule.\n\nNo account, Internet permission, cloud or Google services. Pairing keys stay in private app storage; backups are disabled.\n\nProtocol derived from acato/ha-joule (Apache 2.0). This independent app is not affiliated with Breville.\n\nFull start format adds the cook-session metadata; try it only if the default START is rejected. Hardware operation of this Android port is awaiting your test.").setPositiveButton("OK", null).show();
 		}).show();
 	}
 	String diagnostics() { return "Joule Local v0.1\nAndroid " + Build.VERSION.RELEASE + " / " + Build.MODEL + "\n" + (service == null ? "Service unavailable" : "MTU " + service.mtu + "\n" + service.log.toString()); }
-	void saveInputs() { prefs.edit().putString("target", target.getText().toString()).putString("minutes", minutes.getText().toString()).apply(); }
+	void saveInputs() {
+		SharedPreferences.Editor e = prefs.edit().putString("minutes", minutes.getText().toString());
+		try { double v = Double.parseDouble(target.getText().toString()); e.putString("targetC", Double.toString(useF() ? (v - 32) * 5.0 / 9.0 : v)); } catch (NumberFormatException ignored) { }
+		e.apply();
+	}
 	void adjust(EditText field, double delta, double min, double max, boolean decimal) {
 		try { double n = Double.parseDouble(field.getText().toString()); if (!Double.isFinite(n)) return; n = Math.max(min, Math.min(max, n + delta)); field.setText(decimal ? String.format(Locale.US, "%.1f", n) : Integer.toString((int)n)); } catch (NumberFormatException e) { field.setError("Enter a number"); }
 	}

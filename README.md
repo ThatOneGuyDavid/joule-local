@@ -8,8 +8,12 @@ Initial community release: **v0.1**.
 
 - Find and pair directly with Joule using its physical button.
 - Save the pairing key on the phone.
-- Display live water temperature and set a target in °F.
-- Start and stop cooking with command acknowledgement.
+- Display live water temperature, the Joule's current target, and set a target
+  in °F or °C (auto-detected from the phone locale, with a saved manual
+  override under More / diagnostics).
+- Start, adjust while running (SET), and stop cooking with command
+  acknowledgement. Connects directly to the last used Joule on startup
+  (no scan) and reconnects automatically after Bluetooth drops.
 - Use a separate phone reminder timer.
 - Copy diagnostic logs for troubleshooting.
 

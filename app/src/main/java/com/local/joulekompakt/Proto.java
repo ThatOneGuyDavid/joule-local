@@ -35,6 +35,10 @@ public final class Proto {
 		if (cookId != null) program = join(program, bytes(6, bytes(4, cookId.getBytes(java.nio.charset.StandardCharsets.UTF_8))), number(7, 0));
 		return join(bytes(1, program), feed == 0 ? EMPTY : number(2, feed), sequence == 0 ? EMPTY : number(3, sequence));
 	}
+	public static byte[] updateBody(float celsius) {
+		if (!Float.isFinite(celsius) || celsius < 0 || celsius > 100) throw new IllegalArgumentException("Temperature out of range");
+		return join(fixed(2, Float.floatToIntBits(celsius)), number(4, 1));
+	}
 	public static class Field {
 		public int id, wire; public long value; public byte[] data;
 	}
@@ -77,6 +81,10 @@ public final class Proto {
 	}
 	public static float temperature(List<Field> fs) {
 		for (Field f : fs) if (f.id == 10 && f.wire == 5) return Float.intBitsToFloat((int)f.value);
+		return Float.NaN;
+	}
+	public static float setPoint(List<Field> fs) {
+		for (Field f : fs) if (f.id == 1 && f.wire == 5) return Float.intBitsToFloat((int)f.value);
 		return Float.NaN;
 	}
 }
